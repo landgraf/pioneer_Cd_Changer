@@ -9,8 +9,8 @@
 #define USART_BAUDRATE 9600
 #define BAUD_PRESCALE (((F_CPU / (USART_BAUDRATE * 16UL))) - 1)
 
-volatile uint8_t value = 0;
-volatile uint32_t counter = 44100; // DEBUG ONLY!
+volatile uint8_t value = 0; // Example
+uint16_t counter = 44100; // DEBUG ONLY!
 
 /ISR(USART_RXC_vect){
     value = UDR;
