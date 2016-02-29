@@ -12,7 +12,7 @@
 volatile uint8_t value = 0; // Example
 uint16_t counter = 44100; // DEBUG ONLY!
 
-/ISR(USART_RXC_vect){
+ISR(USART_RXC_vect){
     value = UDR;
 }
 
