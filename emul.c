@@ -9,21 +9,62 @@
 #define USART_BAUDRATE 9600
 #define BAUD_PRESCALE (((F_CPU / (USART_BAUDRATE * 16UL))) - 1)
 
+#define SYSTEM_OFF 0x00
+#define HEAD_UNIT_STATUS 0x01
+#define TO_TAPE 0x03
+#define TO_CD 0x06
+#define TO_DASHBOARD 0x21
+#define FROM_CD_NOT_PLAYING 0x60
+#define FROM_CD_PLAYING 0x61
+#define FROM_TUNER 0x71
+
+#define BSRQ PORTD1
+#define RST PORTD2
+
+
 volatile uint8_t value = 0; // Example
-uint16_t counter = 44100; // DEBUG ONLY!
+// Set flag to 1 once first byte is received
+// and reset to 0 if all bytes of current word are received
+uint8_t incomplete_trasmission = 0; 
 
 ISR(USART_RXC_vect){
     value = UDR;
 }
 
 ISR(TIMER0_COMP_vect){
-  if (++counter == TIMER_FREQ) //DEBUG ONLY:  We expect 1 sec here
-    {
-      PORTD = ~PORTD;
-      counter = 0;
-    };
-
+  PORTD = ~PORTD;
 };
+static inline int in_transmision(){
+  // FIXME real logic here
+  return 0 == 1;
+};
+
+
+void SPI_Send_Byte(void){
+  while (incomplete_trasmission || in_transmision() ){
+  };
+  // We have to switch SPI into master mode before talking
+  // Set MOSI, SCK and SS as output
+  DDRB = (1<<DDB5)|(1<<DDB7)|(1<<DDB4);
+  // Enable SPI, Set master
+  // Set Clock OCS/64
+  // Clock is high when idle
+  // Setup on failing edge
+  SPCR = (1<<SPE)|(1<<MSTR)|(1<<SPR1)|(1<<CPOL)|(1<<CPHA);
+
+  // Switch back to slave
+  // all input
+  // FIXME Isn't it enough to switch clock to input only?
+  DDRB = 0x00;
+  SPCR &= 0<<MSTR;
+}
+
+
+void SPI_Switch_Slave(void){
+  // Switch SPI to slave mode
+  // according to atmega16 datasheet it's not needed as far as it will be switched to
+  // slave ones SS pin is low
+}
 
 void USART_Init(void){
    UBRRL = BAUD_PRESCALE;// Load lower 8-bits into the low byte of the UBRR register
