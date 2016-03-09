@@ -5,10 +5,14 @@
 #include <util/delay.h>
 #include <avr/interrupt.h>
 
-
 #define USART_BAUDRATE 9600
 #define BAUD_PRESCALE (((F_CPU / (USART_BAUDRATE * 16UL))) - 1)
 
+//
+#define DEBUG 1
+//
+
+// Command codes
 #define SYSTEM_OFF 0x00
 #define HEAD_UNIT_STATUS 0x01
 #define TO_TAPE 0x03
@@ -17,25 +21,26 @@
 #define FROM_CD_NOT_PLAYING 0x60
 #define FROM_CD_PLAYING 0x61
 #define FROM_TUNER 0x71
+//
+
 
 #define BSRQ PORTD1
 #define RST PORTD2 // Reset signal should be used for suspend/power_saving
 
 
-volatile uint8_t value = 0; // Example
 // Set flag to 1 once first byte is received
 // and reset to 0 if all bytes of current word are received
 uint8_t incomplete_trasmission = 0;
 
 //transmission buffer
-volatile uint8_t SPI_to_trasnmit[10];
+volatile uint8_t SPI_to_trasnmit[256];
 volatile uint8_t SPI_last = 0;
 
 // receive buffer
 volatile uint8_t messages = 0; // ??
 volatile uint8_t last_received = 0x00;
 volatile uint8_t last_read = 0x00;
-volatile uint8_t SPI_received[10];
+volatile uint8_t SPI_Received[256];
 
 ISR(SPI_STC_vect){
 
@@ -48,51 +53,39 @@ ISR(SPI_STC_vect){
     }
   else
     {
-      SPI_received[last_received++] = SPDR;
+      SPI_Received[last_received++] = SPDR;
       messages++;
     };
 }
 
-ISR(USART_RXC_vect){
-    value = UDR;
-}
-
-ISR(TIMER0_COMP_vect){
-  PORTD = ~PORTD;
-};
-static inline int in_transmision(){
-  // FIXME real logic here
-  return 0 == 1;
-};
-
-
 void SPI_Send_Byte(void){
-  while (incomplete_trasmission || in_transmision() ){
+
+  // don't try to talk while previous message is incomplete
+  // FIXME possible deadlock. That's why we have to use interrupts here
+  while (incomplete_trasmission){
   };
-  // We have to switch SPI into master mode before talking
-  // Set MOSI, SCK and SS as output
-  DDRB = (1<<DDB5)|(1<<DDB7)|(1<<DDB4);
-  // Enable SPI, Set master
-  // Set Clock OCS/64
-  // Clock is high when idle
-  // Setup on failing edge
-  SPCR = (1<<SPE)|(1<<SPIE)|(1<<MSTR)|(1<<SPR1)|(1<<CPOL)|(1<<CPHA);
-
-  // Switch back to slave
-  // all input
-  // FIXME Isn't it enough to switch clock to input only?
-  DDRB = 0x00;
-  SPCR &= 0<<MSTR;
-}
-
-void SPI_Send_Dummy_Status(){
   
-}
+  // We have to switch SPI into master mode before talking
 
-void SPI_Init_Slave(void){
-  // All input. Don't output in slave mode
-  DDRB = 0x00;
-  SPCR = (1<<SPE)|(1<<SPIE);
+  DDRB |= _BV(DDB5); // MOSI is output
+  DDRB |= _BV(DDB7); // SCK is output
+
+  DDRB |= ~(_BV(DDB4)); // SS is intput
+  PINB |= _BV(DDB4); // Enable pull-up
+
+  SPCR |= _BV(SPE);  // Enable SPI
+  SPCR |= _BV(SPIE); // Enable SPI interrupts
+  SPCR |= _BV(DORD); // LS bit first
+  SPCR |= _BV(MSTR); // I'm master
+  SPCR |= _BV(SPR1); // Scale 1/64
+  SPCR |= _BV(CPOL); // Clock is idle high
+  SPCR |= _BV(CPHA); // Setup of failing (leading) edge
+
+  // Send byte here
+  // FIXME
+
+  //Disable SPI
+  SPCR &= 0x00;
 }
 
 void USART_Init(void){
@@ -101,7 +94,6 @@ void USART_Init(void){
    UCSRB = ((1<<TXEN)|(1<<RXEN) | (1<<RXCIE));
 }
 
-
 void USART_SendByte(uint8_t u8Data){
   // Wait until last byte has been transmitted
   while((UCSRA &(1<<UDRE)) == 0);
@@ -109,19 +101,15 @@ void USART_SendByte(uint8_t u8Data){
   UDR = u8Data;
 }
 
-
-// not being used but here for completeness
-// Wait until a byte has been received and return received data 
-uint8_t USART_ReceiveByte(){
-  while((UCSRA &(1<<RXC)) == 0);
-  return UDR;
-}
-
-void Led_init(void){
-   //outputs, all off
-  DDRB = 0xFF;
-  DDRD = 0xFF;
-  PORTD = 1<<4;
+void SPI_Init_Slave(void){
+  // All input. Don't output in slave mode
+  // See datasheet for supported modes
+  DDRB = 0x00;
+  SPCR |= _BV(SPE);  // Enable SPI
+  SPCR |= _BV(SPIE); // Enanle SPI interrupts
+  SPCR |= _BV(DORD); // LS bit first
+  SPCR |= _BV(CPOL); // Clock is idle high
+  SPCR |= _BV(CPHA); // Setup of failing (leading) edge  
 }
 
 void Skip_Message(void){
@@ -131,7 +119,7 @@ void Skip_Message(void){
   // Read "length"
   while (!messages){
   };
-  uint8_t length = SPI_received[last_read++];
+  uint8_t length = SPI_Received[last_read++];
   messages--;
   do
     {
@@ -148,23 +136,84 @@ void Skip_Message(void){
 }
 
 
+void SPI_Proceed_Message(void)
+{
+  if (DEBUG)
+    {
+      for (int i = last_read; i < last_received; i++)
+        {
+          USART_SendByte(SPI_Received[i]);
+        }
+    };
+  
+  
+  switch (SPI_Received[last_read++])
+    {
+    case TO_CD :
+      Skip_Message();
+      break;
+    default :
+      // ignore everything else for now
+      Skip_Message();
+      break;
+    }
+  messages--;
+}
+
+
 
 void Set_SRQ_Timer(){
+
+  // PORTD is output
+  DDRD = _BV(PD4)  | _BV(PD5);
+  PORTD = 0x00;
+  PORTD |= _BV(PD4);
+  
   // CD-Changer should send SRQ request to head unit
-  TCCR0 = _BV(CS00) | _BV(WGM01); // No prescale | compare/match
-  TIMSK = _BV(OCIE0); // Enable compare/match interrupts
-  OCR0 = F_CPU/TIMER_FREQ; // Compare match 181 gives us 0.5us differenc
+  // to achieve this use simple "blink on overflow"
+  TCCR1A = _BV(COM1A0) | _BV(COM1B0); // toggle OC1A OC1B on compare/match
+  TCCR1B = _BV(CS11) | _BV(CS10); // prescale 64 524.288 ms 
+  TIMSK = _BV(TOIE1); // Enable overflow interrupts
 };
 
+void Set_SPI_Transmitter(void)
+{
+}
+
+
 int main(void){
-   USART_Init();  // Initialise USART
-   sei();         // enable all interrupts
-   Led_init();    // init LEDs for testing
-   SPI_Init_Slave(); // init SPI as slave
-   Set_SRQ_Timer(); 
-   for(;;){    // Repeat indefinitely
-          USART_SendByte(F_CPU/TIMER_FREQ);  // send value
-          _delay_ms(499);
+   Set_SRQ_Timer();
+   //Set_SPI_Transmitter;
+   USART_Init();
+
+   sei();         // enable all interrupts   
+
+   for(;;){
+     // pulling SS to check if there's transmissions
+     if (! (PINB & _BV(DDB4)))
+       {
+         // if SPI is not enabled - enable it
+         if (!(SPCR & _BV(SPE)))
+           {
+             SPI_Init_Slave();
+           }
+       }
+     else
+       // SS is idle high. Disabling SPI
+       {
+         if (!(SPCR & _BV(SPE)))
+           {
+             // Disable SPI
+             SPCR = 0x00;
+             // We have messages to process
+             if (!incomplete_trasmission && messages) 
+               {
+                 // proceed message
+                 SPI_Proceed_Message();
+               }
+           }
+       }
    }
 }
+
 	
