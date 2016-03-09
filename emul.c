@@ -19,13 +19,39 @@
 #define FROM_TUNER 0x71
 
 #define BSRQ PORTD1
-#define RST PORTD2
+#define RST PORTD2 // Reset signal should be used for suspend/power_saving
 
 
 volatile uint8_t value = 0; // Example
 // Set flag to 1 once first byte is received
 // and reset to 0 if all bytes of current word are received
-uint8_t incomplete_trasmission = 0; 
+uint8_t incomplete_trasmission = 0;
+
+//transmission buffer
+volatile uint8_t SPI_to_trasnmit[10];
+volatile uint8_t SPI_last = 0;
+
+// receive buffer
+volatile uint8_t messages = 0; // ??
+volatile uint8_t last_received = 0x00;
+volatile uint8_t last_read = 0x00;
+volatile uint8_t SPI_received[10];
+
+ISR(SPI_STC_vect){
+
+  while (!(SPSR & (1<<SPIF))){
+  };
+  // if we're master then trash received data (it'll be sent data because of SISO)
+  if ( (1<<MSTR) & SPCR)
+    {
+      uint8_t dummy = SPDR;
+    }
+  else
+    {
+      SPI_received[last_received++] = SPDR;
+      messages++;
+    };
+}
 
 ISR(USART_RXC_vect){
     value = UDR;
@@ -50,7 +76,7 @@ void SPI_Send_Byte(void){
   // Set Clock OCS/64
   // Clock is high when idle
   // Setup on failing edge
-  SPCR = (1<<SPE)|(1<<MSTR)|(1<<SPR1)|(1<<CPOL)|(1<<CPHA);
+  SPCR = (1<<SPE)|(1<<SPIE)|(1<<MSTR)|(1<<SPR1)|(1<<CPOL)|(1<<CPHA);
 
   // Switch back to slave
   // all input
@@ -59,11 +85,14 @@ void SPI_Send_Byte(void){
   SPCR &= 0<<MSTR;
 }
 
+void SPI_Send_Dummy_Status(){
+  
+}
 
-void SPI_Switch_Slave(void){
-  // Switch SPI to slave mode
-  // according to atmega16 datasheet it's not needed as far as it will be switched to
-  // slave ones SS pin is low
+void SPI_Init_Slave(void){
+  // All input. Don't output in slave mode
+  DDRB = 0x00;
+  SPCR = (1<<SPE)|(1<<SPIE);
 }
 
 void USART_Init(void){
@@ -95,7 +124,33 @@ void Led_init(void){
   PORTD = 1<<4;
 }
 
-void Set_Clock_Timer(){
+void Skip_Message(void){
+  // at this point "command" shound be read and
+  // next expected byte is length
+  incomplete_trasmission = 1;
+  // Read "length"
+  while (!messages){
+  };
+  uint8_t length = SPI_received[last_read++];
+  messages--;
+  do
+    {
+      // wait for message to read
+      while(!messages){
+      };
+      // move read cursor
+      // trash useless messages
+      last_read++;
+      messages--;
+    }
+  while (length--);
+  incomplete_trasmission = 0;
+}
+
+
+
+void Set_SRQ_Timer(){
+  // CD-Changer should send SRQ request to head unit
   TCCR0 = _BV(CS00) | _BV(WGM01); // No prescale | compare/match
   TIMSK = _BV(OCIE0); // Enable compare/match interrupts
   OCR0 = F_CPU/TIMER_FREQ; // Compare match 181 gives us 0.5us differenc
@@ -105,7 +160,8 @@ int main(void){
    USART_Init();  // Initialise USART
    sei();         // enable all interrupts
    Led_init();    // init LEDs for testing
-   Set_Clock_Timer();
+   SPI_Init_Slave(); // init SPI as slave
+   Set_SRQ_Timer(); 
    for(;;){    // Repeat indefinitely
           USART_SendByte(F_CPU/TIMER_FREQ);  // send value
           _delay_ms(499);
