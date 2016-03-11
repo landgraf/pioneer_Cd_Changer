@@ -24,6 +24,7 @@
 //
 
 
+#define wait_SPI  while (!(SPSR & (1<<SPIF))){}
 #define BSRQ PORTD1
 #define RST PORTD2 // Reset signal should be used for suspend/power_saving
 
@@ -31,6 +32,10 @@
 // Set flag to 1 once first byte is received
 // and reset to 0 if all bytes of current word are received
 uint8_t incomplete_trasmission = 0;
+
+// test usart
+volatile uint8_t sendback = 0;
+volatile uint8_t sendback_value = 0;
 
 //transmission buffer
 volatile uint8_t SPI_to_trasnmit[256];
@@ -57,6 +62,12 @@ ISR(SPI_STC_vect){
       messages++;
     };
 }
+
+ISR(USART_RXC_vect){
+  sendback++;
+  sendback_value = UDR;
+}
+
 
 void SPI_Send_Byte(void){
 
@@ -130,11 +141,75 @@ void Skip_Message(void){
       // trash useless messages
       last_read++;
       messages--;
+      length--;
     }
-  while (length--);
+  while (length);
   incomplete_trasmission = 0;
+
 }
 
+void Respond_Message()
+{
+  // at this point "command" shound be read and
+  // next expected byte is length
+  incomplete_trasmission = 1;
+  // Read "length"
+  while (!messages){
+  };
+  uint8_t length = SPI_Received[last_read++];
+  messages--;
+
+  // There are few possible messages
+
+  // 06 00    -> first message
+  //          -- Response 60 01 18
+
+  SPDR = 0x60;
+  wait_SPI;
+
+  if ( 0x00 == length )
+    {
+      SPDR = 0x01;
+      wait_SPI;
+      SPDR = 0x18;
+      wait_SPI;
+      return;
+    };
+  
+  if ( 0x01 == length ){
+    uint8_t command  = SPI_Received[last_read++];
+    switch (command) {
+      // 06 01 F0 -> Startup "F0" message
+      //          -- response 60 03 18 00 01
+    case 0xf0 :
+      SPDR = 0x01;
+      wait_SPI;
+      SPDR = 0xFD;
+      wait_SPI;
+      break;
+      // 06 01 F6 -> Startup "F5" message
+      // 06 01 00 -> Status
+      //          -- response 06 0A 18 00 F1 01 01 01 00 3F 03 00
+    case 0xf6 | 0x00 :
+      SPDR = 0x0a;
+      wait_SPI;
+      uint8_t body[10] = {0x18, 0x00, 0xf1, 0x01, 0x01, 0x01, 0x00, 0x3f, 0x03, 0x00};
+      for (int i = 0; i < 10; i++){
+        SPDR = body[i];
+        wait_SPI;
+      };
+      break;
+    default:
+      SPDR = 0x00;
+      wait_SPI;
+      break;
+    };
+
+  };
+  
+  
+  
+};
 
 void SPI_Proceed_Message(void)
 {
@@ -150,11 +225,16 @@ void SPI_Proceed_Message(void)
   switch (SPI_Received[last_read++])
     {
     case TO_CD :
+      Respond_Message();
+      break;
+    case SYSTEM_OFF | HEAD_UNIT_STATUS | TO_TAPE | TO_DASHBOARD | FROM_TUNER :
+      // skip message
       Skip_Message();
       break;
     default :
       // ignore everything else for now
-      Skip_Message();
+      // raise Error
+      // it means we lost some transmissions and have to recover from this situration
       break;
     }
   messages--;
@@ -187,31 +267,19 @@ int main(void){
    USART_Init();
 
    sei();         // enable all interrupts   
+   SPI_Init_Slave();
 
+   
    for(;;){
-     // pulling SS to check if there's transmissions
-     if (! (PINB & _BV(DDB4)))
+     if (sendback){
+       USART_SendByte(sendback_value);
+       sendback = 0;
+     }
+     
+     if (!incomplete_trasmission && messages) 
        {
-         // if SPI is not enabled - enable it
-         if (!(SPCR & _BV(SPE)))
-           {
-             SPI_Init_Slave();
-           }
-       }
-     else
-       // SS is idle high. Disabling SPI
-       {
-         if (!(SPCR & _BV(SPE)))
-           {
-             // Disable SPI
-             SPCR = 0x00;
-             // We have messages to process
-             if (!incomplete_trasmission && messages) 
-               {
-                 // proceed message
-                 SPI_Proceed_Message();
-               }
-           }
+         // proceed message
+         SPI_Proceed_Message();
        }
    }
 }
