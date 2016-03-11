@@ -4,6 +4,13 @@
 #include <avr/io.h>
 #include <util/delay.h>
 #include <avr/interrupt.h>
+// Wires
+// Black - BDATA
+// 1 - BSRQ
+// UTP - RST
+// 2 - BRXEN
+// 0 - SCK
+
 
 #define USART_BAUDRATE 9600
 #define BAUD_PRESCALE (((F_CPU / (USART_BAUDRATE * 16UL))) - 1)
@@ -25,8 +32,6 @@
 
 
 #define wait_SPI  while (!(SPSR & (1<<SPIF))){}
-#define BSRQ PORTD1
-#define RST PORTD2 // Reset signal should be used for suspend/power_saving
 
 
 // Set flag to 1 once first byte is received
@@ -42,6 +47,8 @@ volatile uint8_t SPI_to_trasnmit[256];
 volatile uint8_t SPI_last = 0;
 
 // receive buffer
+// FIXME this is ugly
+// We use half duplex mode and no reason no have buffer
 volatile uint8_t messages = 0; // ??
 volatile uint8_t last_received = 0x00;
 volatile uint8_t last_read = 0x00;
@@ -63,13 +70,28 @@ ISR(SPI_STC_vect){
     };
 }
 
+ISR(TIMER1_OVF_vect){
+  PORTA = ~PORTA;
+}
+
 ISR(USART_RXC_vect){
   sendback++;
   sendback_value = UDR;
 }
 
+void SPI_Init_Slave(void){
+  // All input. Don't output in slave mode
+  // See datasheet for supported modes
+  DDRB = 0x00;
+  PORTB = 0x00;
+  SPCR |= _BV(SPE);  // Enable SPI
+  SPCR |= _BV(SPIE); // Enanle SPI interrupts
+  SPCR |= _BV(DORD); // LS bit first
+  SPCR |= _BV(CPOL); // Clock is idle high
+  SPCR |= _BV(CPHA); // Setup of failing (leading) edge  
+}
 
-void SPI_Send_Byte(void){
+void SPI_Send_Byte(uint8_t byte){
 
   // don't try to talk while previous message is incomplete
   // FIXME possible deadlock. That's why we have to use interrupts here
@@ -78,11 +100,14 @@ void SPI_Send_Byte(void){
   
   // We have to switch SPI into master mode before talking
 
+  DDRB  |= _BV(DDB4); // SS is outtput
+  PORTB |=  0<<DDB4; // pull SS down
+  
   DDRB |= _BV(DDB5); // MOSI is output
   DDRB |= _BV(DDB7); // SCK is output
 
-  DDRB |= ~(_BV(DDB4)); // SS is intput
-  PINB |= _BV(DDB4); // Enable pull-up
+
+  //  PINB |= _BV(DDB4); // Enable pull-up
 
   SPCR |= _BV(SPE);  // Enable SPI
   SPCR |= _BV(SPIE); // Enable SPI interrupts
@@ -93,10 +118,12 @@ void SPI_Send_Byte(void){
   SPCR |= _BV(CPHA); // Setup of failing (leading) edge
 
   // Send byte here
-  // FIXME
-
-  //Disable SPI
-  SPCR &= 0x00;
+  _delay_us(500);
+  SPDR = byte;
+  wait_SPI;
+  
+  //Switch to Slave
+  SPI_Init_Slave();
 }
 
 void USART_Init(void){
@@ -112,16 +139,7 @@ void USART_SendByte(uint8_t u8Data){
   UDR = u8Data;
 }
 
-void SPI_Init_Slave(void){
-  // All input. Don't output in slave mode
-  // See datasheet for supported modes
-  DDRB = 0x00;
-  SPCR |= _BV(SPE);  // Enable SPI
-  SPCR |= _BV(SPIE); // Enanle SPI interrupts
-  SPCR |= _BV(DORD); // LS bit first
-  SPCR |= _BV(CPOL); // Clock is idle high
-  SPCR |= _BV(CPHA); // Setup of failing (leading) edge  
-}
+
 
 void Skip_Message(void){
   // at this point "command" shound be read and
@@ -150,9 +168,6 @@ void Skip_Message(void){
 
 void Respond_Message()
 {
-  // at this point "command" shound be read and
-  // next expected byte is length
-  incomplete_trasmission = 1;
   // Read "length"
   while (!messages){
   };
@@ -164,15 +179,12 @@ void Respond_Message()
   // 06 00    -> first message
   //          -- Response 60 01 18
 
-  SPDR = 0x60;
-  wait_SPI;
+  SPI_Send_Byte(0x60);
 
   if ( 0x00 == length )
     {
-      SPDR = 0x01;
-      wait_SPI;
-      SPDR = 0x18;
-      wait_SPI;
+      SPI_Send_Byte (0x01);
+      SPI_Send_Byte (0x18);
       return;
     };
   
@@ -182,26 +194,21 @@ void Respond_Message()
       // 06 01 F0 -> Startup "F0" message
       //          -- response 60 03 18 00 01
     case 0xf0 :
-      SPDR = 0x01;
-      wait_SPI;
-      SPDR = 0xFD;
-      wait_SPI;
+      SPI_Send_Byte(0x01);
+      SPI_Send_Byte(0xFD);
       break;
       // 06 01 F6 -> Startup "F5" message
       // 06 01 00 -> Status
       //          -- response 06 0A 18 00 F1 01 01 01 00 3F 03 00
     case 0xf6 | 0x00 :
-      SPDR = 0x0a;
-      wait_SPI;
+      SPI_Send_Byte(0x0a);
       uint8_t body[10] = {0x18, 0x00, 0xf1, 0x01, 0x01, 0x01, 0x00, 0x3f, 0x03, 0x00};
       for (int i = 0; i < 10; i++){
-        SPDR = body[i];
-        wait_SPI;
+        SPI_Send_Byte(body[i]);
       };
       break;
     default:
-      SPDR = 0x00;
-      wait_SPI;
+      SPI_Send_Byte(0x00);
       break;
     };
 
@@ -244,11 +251,9 @@ void SPI_Proceed_Message(void)
 
 void Set_SRQ_Timer(){
 
-  // PORTD is output
-  DDRD = _BV(PD4)  | _BV(PD5);
-  PORTD = 0x00;
-  PORTD |= _BV(PD4);
-  
+  DDRD = 0x00;
+  DDRD |= 1<<4;
+  DDRD |= 1<<5;
   // CD-Changer should send SRQ request to head unit
   // to achieve this use simple "blink on overflow"
   TCCR1A = _BV(COM1A0) | _BV(COM1B0); // toggle OC1A OC1B on compare/match
@@ -262,26 +267,28 @@ void Set_SPI_Transmitter(void)
 
 
 int main(void){
-   Set_SRQ_Timer();
-   //Set_SPI_Transmitter;
-   USART_Init();
-
-   sei();         // enable all interrupts   
-   SPI_Init_Slave();
-
-   
-   for(;;){
-     if (sendback){
-       USART_SendByte(sendback_value);
-       sendback = 0;
-     }
-     
-     if (!incomplete_trasmission && messages) 
-       {
-         // proceed message
-         SPI_Proceed_Message();
-       }
-   }
+  PORTA = 0x00;
+  DDRA = 0xff;
+  Set_SRQ_Timer();
+  //Set_SPI_Transmitter;
+  USART_Init();
+  
+  sei();         // enable all interrupts   
+  SPI_Init_Slave();
+  
+  
+  for(;;){
+    if (sendback){
+      USART_SendByte(sendback_value);
+      sendback = 0;
+    }
+    
+    if (!incomplete_trasmission && messages) 
+      {
+        // proceed message
+        SPI_Proceed_Message();
+      }
+  }
 }
 
 	
