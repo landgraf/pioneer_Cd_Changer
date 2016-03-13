@@ -15,11 +15,36 @@
 #define clr_bit(reg, bit)   reg &= (~(1<<(bit))) // Сброс бита.
 #define switch_bit(reg, bit)  reg ^= (1<<(bit)) // Переключение бита.
 
+// looping when bit is 1
+//#define wait_low(reg, bit) while(reg & (1<<bit)){}
+#define wait_low(reg, bit) while(bit_is_set(reg,bit)){}
+// looping when bit is 0
+#define wait_high(reg, bit) while(! bit_is_set(reg,bit)){}
+
+// Wires
+// Black - BDATA
+// 1 - BSRQ
+// UTP - RST
+// 2 - BRXEN
+// 0 - SCK
+
+
 #define BDATA 5
 #define BCLK 7
 #define BRXEN 4
 #define BSRQ 3
 #define BRST 2
+
+// Command codes
+#define SYSTEM_OFF 0x00
+#define HEAD_UNIT_STATUS 0x01
+#define TO_TAPE 0x03
+#define TO_CD 0x06
+#define TO_DASHBOARD 0x21
+#define FROM_CD_NOT_PLAYING 0x60
+#define FROM_CD_PLAYING 0x61
+#define FROM_TUNER 0x71
+//
 
 
 volatile uint8_t has_message = 0;
@@ -27,6 +52,10 @@ volatile uint8_t message = 0;
 
 volatile uint8_t us = 0;
 volatile uint8_t um = 0;
+
+uint8_t mins = 0;
+volatile uint8_t secs = 0;
+
 
 uint8_t counter = 0;
 
@@ -38,26 +67,46 @@ ISR(USART_RXC_vect)
   um = 1;
 }
 
+
+
+ISR(TIMER1_OVF_vect)
+{
+  secs++;
+  if (++counter == 10)
+    {
+      clr_bit(PORTB, BSRQ);
+      counter = 0;
+    }
+}
+
 void USART_Init(void){
    UBRRL = BAUD_PRESCALE;// Load lower 8-bits into the low byte of the UBRR register
    UBRRH = (BAUD_PRESCALE >> 8); 
    UCSRB = ((1<<TXEN)|(1<<RXEN) | (1<<RXCIE));
 }
 
+void Led_Error(void)
+{
+  PORTD = 0xff;
+}
+
 void SPI_Send_Byte(uint8_t byte)
 {
-  uint8_t delay = 50;
-  PORTB = 0xff;
-  DDRB = 0xff; // PORTB is output
-  PORTB = 0xff; // idle high
+  wait_high (PINB, BRXEN);
+  uint8_t delay = 55; // magic numbers YAY!
+  PORTB = 0xff & ~(1<<BRST); // idle high
+  DDRB = 0xff & ~(1<<BRST); // PORTB is output except RST
+
+  _delay_ms(1);
   clr_bit (PORTB, BRXEN);
+
+
   _delay_us(delay*2); // Because Pioneer does it (:
   for (int i = 0; i<8; i++) // while looks better (?)
     {
-      _delay_us(delay);
       uint8_t set = byte & 1<<i;
       // tick clock low
-      clr_bit (PORTB, BCLK);
+
       // set value
       if ( set )
         {
@@ -67,16 +116,19 @@ void SPI_Send_Byte(uint8_t byte)
         {
           clr_bit (PORTB, BDATA);
         };
+      clr_bit (PORTB, BCLK);
       _delay_us(delay);
       // tick clock high
       // reader should pick the value up
       set_bit (PORTB, BCLK);
-    }
+      _delay_us(delay);
+    } 
   set_bit (PORTB, BDATA);
-  _delay_us(delay*5);
+  _delay_us(delay*4);
   set_bit (PORTB, BRXEN);
-  DDRB = 0x00; // All input
-  PORTB = 0x00; // HighZ
+  _delay_ms(0.5);
+  DDRB  = 0x00 | (1<<BSRQ); // all input except BSRQ
+  PORTB = 0x00 | (1<<BSRQ); // HighZ BSRQ high
 }
 
 void USART_Send_Byte(uint8_t u8Data){
@@ -88,8 +140,145 @@ void USART_Send_Byte(uint8_t u8Data){
 
 void Led_Init(){
   set_bit(DDRD, DDD5);
+  set_bit(DDRD, DDD4);
   clr_bit(PORTD, DDD5);
+  clr_bit(PORTD, DDD4);
+  set_bit(DDRB, BSRQ);
+  set_bit(PORTB, BSRQ);
 }
+
+void SPI_Slave_Init()
+{
+  PORTB = 0x00 | (1<<BSRQ);
+  DDRB  = 0x00 | (1<<BSRQ);
+}
+
+uint8_t SPI_Read_Byte(void)
+{
+  // wait for BRXEN becomes low
+  wait_low (PINB, BRXEN);
+
+
+
+  uint8_t byte = 0;
+  for (int bit = 0; bit < 8; bit++)
+    {
+      if (bit_is_set (PINB, BRXEN))
+        {
+          Led_Error();
+          return 0xBB;
+        };
+      // wait for falling clock
+      wait_low (PINB, BCLK);
+      // Master setup
+      
+      // wait for clock raising
+      wait_high(PINB, BCLK);
+
+      // changed from low to high
+      // read bit value
+      if (bit_is_set(PINB, BDATA))
+        {
+          set_bit(byte, bit);
+        }
+      else
+        {
+          clr_bit(byte, bit);
+        }
+    }
+  // wait for complete
+  wait_high(PINB, BRXEN);
+  USART_Send_Byte (byte);
+  return byte;
+}
+
+void SPI_Listen()
+{
+
+  for (;;)
+    {
+      uint8_t byte = SPI_Read_Byte();
+      if (byte == 0x06)
+        {
+          set_bit(PORTB, BSRQ);
+          // We won!
+          uint8_t length = SPI_Read_Byte();
+          if (length > 1)
+            {
+              Led_Error();
+              return;
+            }
+          
+          if (length)
+            {
+              uint8_t body = SPI_Read_Byte();
+              switch (body)
+                {
+                case 0x00 | 0xf6:
+                  SPI_Send_Byte(0x61);
+                  SPI_Send_Byte(0x0a);
+
+                  if (secs > 60){
+                    mins++;
+                    secs = 0;
+                  };
+                  
+                  uint8_t body[10] = {0x18,
+                                      0x04,
+                                      0xf1,
+                                      0x01,
+                                      mins,
+                                      secs,
+                                      0x00,
+                                      0x3f,
+                                      0x03,
+                                      0x00};
+                  // Original CD changer sends words groupped by 3
+                  // for example
+                  // W - 0.5ms - W - 0.5ms - W ---------- 6ms ------------- W - 0.5ms - ....
+                  // emulate it here
+                  for (int i = 0; i < 10; i++){
+                    SPI_Send_Byte(body[i]);
+                    switch (i)
+                      {
+                      case 1 | 4 | 7  :
+                        _delay_ms(5);
+                        break;
+                      default:
+                        break;
+                      }
+                  };
+                default:
+                  break;
+                }
+            }
+          else
+            {
+              SPI_Send_Byte (0x60);
+              SPI_Send_Byte (0x01);
+              SPI_Send_Byte (0x18);
+            }
+        }
+    }
+
+}
+
+void Send_First_SRQ(void)
+{
+  // wait for high RST
+  wait_high (PINB, BRST);
+  clr_bit (PORTB, BSRQ);
+}
+
+void Set_SRQ_Timer(){
+
+  // CD-Changer should send SRQ request to head unit
+  // to achieve this use simple "blink on overflow"
+  //  TCCR1A = _BV(COM1A0) | _BV(COM1B0); // toggle OC1A OC1B on compare/match
+  TCCR1B = _BV(CS11) | _BV(CS10); // prescale 64 524.288 ms 
+  TIMSK = _BV(TOIE1); // Enable overflow interrupts
+  
+};
 
 int main(void)
 {
@@ -97,16 +286,20 @@ int main(void)
   Led_Init();
   sei();
 
+  SPI_Slave_Init();
+  Set_SRQ_Timer();
+  Send_First_SRQ();
+  /*  for (;;)
+    {
+      SPI_Send_Byte(0x60);
+      _delay_ms(200);
+    }
+  */
+  SPI_Listen();
+
   for (;;)
     {
-      SPI_Send_Byte (counter++);
+      Led_Error();
       _delay_ms(200);
-      /*      if (um)
-        {
-          switch_bit(PORTD, DDD5);
-          USART_Send_Byte(us);
-          SPI_Send_Byte(counter++);
-          um = 0;
-          }*/
     }
 }
