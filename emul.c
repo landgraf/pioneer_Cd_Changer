@@ -1,4 +1,4 @@
-#define F_CPU 2000000UL  // 2 MHz
+#define F_CPU 8000000UL  // 2 MHz
 #define TIMER_FREQ     44100
 
 #define USART_BAUDRATE 9600
@@ -10,6 +10,7 @@
 #include <avr/interrupt.h>
 
 #define wait_SPI  while (!(SPSR & (1<<SPIF))){}
+
 //#define send_SPI(byte) wait_SPI; 
 #define set_bit(reg, bit)  reg |= (1<<(bit))    // Установка бита.
 #define clr_bit(reg, bit)   reg &= (~(1<<(bit))) // Сброс бита.
@@ -23,10 +24,11 @@
 
 // Wires
 // Black - BDATA
-// 1 - BSRQ
-// UTP - RST
-// 2 - BRXEN
-// 0 - SCK
+// Yello - BSRQ
+// Grren - RST
+// Red - BRXEN
+// Blue - SCK
+// Ground //
 
 
 #define BDATA 5
@@ -47,15 +49,8 @@
 //
 
 
-volatile uint8_t has_message = 0;
-volatile uint8_t message = 0;
-
-volatile uint8_t us = 0;
-volatile uint8_t um = 0;
-
 uint8_t mins = 0;
 volatile uint8_t secs = 0;
-
 
 uint8_t counter = 0;
 
@@ -63,8 +58,7 @@ ISR(USART_RXC_vect)
 {
   //  has_message = 15;
   while((UCSRA &(1<<UDRE)) == 0);
-  us = UDR;
-  um = 1;
+  uint8_t dummy = UDR;
 }
 
 
@@ -93,22 +87,18 @@ void Led_Error(void)
 void SPI_Send_Byte(uint8_t byte)
 {
   wait_high (PINB, BRXEN);
-  uint8_t delay = 55; // magic numbers YAY!
+  uint8_t delay = 15; // magic numbers YAY!
   PORTB = 0xff & ~(1<<BRST); // idle high
   DDRB = 0xff & ~(1<<BRST); // PORTB is output except RST
 
-  _delay_ms(1);
   clr_bit (PORTB, BRXEN);
 
-
-  _delay_us(delay*2); // Because Pioneer does it (:
+  _delay_us(delay*5); // Because Pioneer does it (:
   for (int i = 0; i<8; i++) // while looks better (?)
     {
-      uint8_t set = byte & 1<<i;
-      // tick clock low
-
+      _delay_us(delay);
       // set value
-      if ( set )
+      if ( byte & 0x01 )
         {
           set_bit (PORTB, BDATA);
         }
@@ -117,16 +107,18 @@ void SPI_Send_Byte(uint8_t byte)
           clr_bit (PORTB, BDATA);
         };
       clr_bit (PORTB, BCLK);
+      byte >>= 1;
       _delay_us(delay);
       // tick clock high
       // reader should pick the value up
       set_bit (PORTB, BCLK);
-      _delay_us(delay);
-    } 
+
+    }
+  _delay_us(delay);
   set_bit (PORTB, BDATA);
-  _delay_us(delay*4);
+  _delay_us(150);
   set_bit (PORTB, BRXEN);
-  _delay_ms(0.5);
+  _delay_us(300);
   DDRB  = 0x00 | (1<<BSRQ); // all input except BSRQ
   PORTB = 0x00 | (1<<BSRQ); // HighZ BSRQ high
 }
@@ -194,7 +186,7 @@ uint8_t SPI_Read_Byte(void)
 
 void SPI_Listen()
 {
-
+  uint8_t delay = 9;
   for (;;)
     {
       uint8_t byte = SPI_Read_Byte();
@@ -212,9 +204,11 @@ void SPI_Listen()
           if (length)
             {
               uint8_t body = SPI_Read_Byte();
+
               switch (body)
                 {
                 case 0x00 | 0xf6:
+                  _delay_ms(delay);
                   SPI_Send_Byte(0x61);
                   SPI_Send_Byte(0x0a);
 
@@ -254,6 +248,7 @@ void SPI_Listen()
             }
           else
             {
+              _delay_ms(delay);
               SPI_Send_Byte (0x60);
               SPI_Send_Byte (0x01);
               SPI_Send_Byte (0x18);
@@ -274,7 +269,6 @@ void Set_SRQ_Timer(){
 
   // CD-Changer should send SRQ request to head unit
   // to achieve this use simple "blink on overflow"
-  //  TCCR1A = _BV(COM1A0) | _BV(COM1B0); // toggle OC1A OC1B on compare/match
   TCCR1B = _BV(CS11) | _BV(CS10); // prescale 64 524.288 ms 
   TIMSK = _BV(TOIE1); // Enable overflow interrupts
   
@@ -289,12 +283,17 @@ int main(void)
   SPI_Slave_Init();
   Set_SRQ_Timer();
   Send_First_SRQ();
-  /*  for (;;)
-    {
-      SPI_Send_Byte(0x60);
-      _delay_ms(200);
-    }
+  /*        
+  for (;;)
+  {
+    SPI_Send_Byte(0x60);
+    SPI_Send_Byte(0x22);
+    _delay_ms(100);
+  };
   */
+  
+  
+  
   SPI_Listen();
 
   for (;;)
