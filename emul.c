@@ -84,16 +84,18 @@ void Led_Error(void)
   PORTD = 0xff;
 }
 
-void SPI_Send_Byte(uint8_t byte)
+void SPI_Send_Byte(uint8_t byte, uint8_t checksum)
 {
   wait_high (PINB, BRXEN);
-  uint8_t delay = 15; // magic numbers YAY!
+  uint8_t delay = 10; // magic numbers YAY!
   PORTB = 0xff & ~(1<<BRST); // idle high
-  DDRB = 0xff & ~(1<<BRST); // PORTB is output except RST
-
+  DDRB  = 0xff & ~(1<<BRST); // PORTB is output except RST
+  
   clr_bit (PORTB, BRXEN);
 
-  _delay_us(delay*5); // Because Pioneer does it (:
+  _delay_us(delay*1); // Because Pioneer does it (:
+  clr_bit(PORTB,BDATA);
+  _delay_us(delay*4); // Because Pioneer does it (:
   for (int i = 0; i<8; i++) // while looks better (?)
     {
       _delay_us(delay);
@@ -107,16 +109,20 @@ void SPI_Send_Byte(uint8_t byte)
           clr_bit (PORTB, BDATA);
         };
       clr_bit (PORTB, BCLK);
-      byte >>= 1;
       _delay_us(delay);
+      byte >>= 1;
       // tick clock high
       // reader should pick the value up
       set_bit (PORTB, BCLK);
+      // TODO Xor to find delay
 
     }
   _delay_us(delay);
   set_bit (PORTB, BDATA);
-  _delay_us(150);
+  while (checksum--)
+  {
+      _delay_us(10);
+  }
   set_bit (PORTB, BRXEN);
   _delay_us(300);
   DDRB  = 0x00 | (1<<BSRQ); // all input except BSRQ
@@ -135,8 +141,7 @@ void Led_Init(){
   set_bit(DDRD, DDD4);
   clr_bit(PORTD, DDD5);
   clr_bit(PORTD, DDD4);
-  set_bit(DDRB, BSRQ);
-  set_bit(PORTB, BSRQ);
+  set_bit(SFIOR, PUD);
 }
 
 void SPI_Slave_Init()
@@ -186,7 +191,7 @@ uint8_t SPI_Read_Byte(void)
 
 void SPI_Listen()
 {
-  uint8_t delay = 9;
+  uint8_t delay = 10;
   for (;;)
     {
       uint8_t byte = SPI_Read_Byte();
@@ -209,8 +214,8 @@ void SPI_Listen()
                 {
                 case 0x00 | 0xf6:
                   _delay_ms(delay);
-                  SPI_Send_Byte(0x61);
-                  SPI_Send_Byte(0x0a);
+                  SPI_Send_Byte(0x61, 0x12);
+                  SPI_Send_Byte(0x0a, 0x6c);
 
                   if (secs > 60){
                     mins++;
@@ -232,7 +237,7 @@ void SPI_Listen()
                   // W - 0.5ms - W - 0.5ms - W ---------- 6ms ------------- W - 0.5ms - ....
                   // emulate it here
                   for (int i = 0; i < 10; i++){
-                    SPI_Send_Byte(body[i]);
+                    SPI_Send_Byte(body[i], 0x12);
                     switch (i)
                       {
                       case 1 | 4 | 7  :
@@ -249,9 +254,9 @@ void SPI_Listen()
           else
             {
               _delay_ms(delay);
-              SPI_Send_Byte (0x60);
-              SPI_Send_Byte (0x01);
-              SPI_Send_Byte (0x18);
+              SPI_Send_Byte (0x60, 21);
+              SPI_Send_Byte (0x01, 11);
+              SPI_Send_Byte (0x18, 26);
             }
         }
     }
@@ -262,6 +267,7 @@ void Send_First_SRQ(void)
 {
   // wait for high RST
   wait_high (PINB, BRST);
+  _delay_ms(1.5);
   clr_bit (PORTB, BSRQ);
 }
 
@@ -283,16 +289,14 @@ int main(void)
   SPI_Slave_Init();
   Set_SRQ_Timer();
   Send_First_SRQ();
-  /*        
-  for (;;)
+  /* for (;;)
   {
-    SPI_Send_Byte(0x60);
-    SPI_Send_Byte(0x22);
+    SPI_Send_Byte (0x60, 21);
+    SPI_Send_Byte (0x01, 11);
+    SPI_Send_Byte (0x18, 26);
     _delay_ms(100);
   };
   */
-  
-  
   
   SPI_Listen();
 
