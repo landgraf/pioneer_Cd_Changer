@@ -84,49 +84,66 @@ void Led_Error(void)
   PORTD = 0xff;
 }
 
-void SPI_Send_Byte(uint8_t byte, uint8_t checksum)
+void SPI_Init_Master()
 {
+  PORTB = 0xff;
+  DDRB = ((1<<DDB4)|(1<<DDB5)|(1<<DDB6)|(1<<DDB7)); //spi pins on port b MOSI SCK,SS outputs
+  clr_bit(PORTB, BRXEN);
+  _delay_us(10);
+  clr_bit(PORTB, BDATA);
+  clr_bit(PORTB, 6);
+  _delay_us(30);
+  /*
+  SPSR |= (1<<SPI2X);
+  SPCR = ((1<<SPE)|(1<<MSTR)|(1<<DORD)|(1<<SPR0)|(1<<SPI2X)|(1<<SPR1)|(1<<CPOL)|(1<<CPHA));  // SPI enable, Master, f/16
+  */
+  set_bit(SPCR, MSTR); // master 
+  set_bit(SPCR, SPR0);  // ** 
+  clr_bit(SPSR, SPI2X); // ** f/128
+  set_bit(SPCR, SPR1);  // **
+  set_bit(SPCR, DORD); // LS first
+  set_bit(SPCR, CPOL); // clock idle high
+  set_bit(SPCR, CPHA); // trailing samle
+  set_bit(SPCR, SPE); // enable SPI
+
+}
+
+void SPI_Disable()
+{
+  clr_bit(SPCR, SPE);
+}
+
+
+uint8_t SPI_Send_Byte(uint8_t byte, uint8_t checksum)
+{
+  uint8_t delay_after = 44 - checksum;
   wait_high (PINB, BRXEN);
-  uint8_t delay = 10; // magic numbers YAY!
-  PORTB = 0xff & ~(1<<BRST); // idle high
-  DDRB  = 0xff & ~(1<<BRST); // PORTB is output except RST
+  SPI_Init_Master();
   
-  clr_bit (PORTB, BRXEN);
-
-  _delay_us(delay*1); // Because Pioneer does it (:
-  clr_bit(PORTB,BDATA);
-  _delay_us(delay*4); // Because Pioneer does it (:
-  for (int i = 0; i<8; i++) // while looks better (?)
+  SPDR = byte;
+  while(!(SPSR & (1<<SPIF)))
+    ;
+  uint8_t ret = SPDR;
+  SPI_Disable();
+  _delay_us(10);
+  clr_bit(DDRB, BRXEN);
+  DDRB = 1<<BSRQ;
+  PORTB = 0xff & ~(1<<BRXEN); // ????
+  _delay_us(500);
+  /*
+  while(checksum--)
     {
-      _delay_us(delay);
-      // set value
-      if ( byte & 0x01 )
-        {
-          set_bit (PORTB, BDATA);
-        }
-      else
-        {
-          clr_bit (PORTB, BDATA);
-        };
-      clr_bit (PORTB, BCLK);
-      _delay_us(delay);
-      byte >>= 1;
-      // tick clock high
-      // reader should pick the value up
-      set_bit (PORTB, BCLK);
-      // TODO Xor to find delay
-
-    }
-  _delay_us(delay);
-  set_bit (PORTB, BDATA);
-  while (checksum--)
-  {
       _delay_us(10);
-  }
-  set_bit (PORTB, BRXEN);
-  _delay_us(300);
-  DDRB  = 0x00 | (1<<BSRQ); // all input except BSRQ
-  PORTB = 0x00 | (1<<BSRQ); // HighZ BSRQ high
+    }
+  set_bit(PORTB, 4);
+  DDRB = 1<<BSRQ;
+  PORTB = 0xff;
+  while (delay_after--)
+    {
+      _delay_us(10);
+    };
+  */
+  return SPDR;
 }
 
 void USART_Send_Byte(uint8_t u8Data){
@@ -141,7 +158,7 @@ void Led_Init(){
   set_bit(DDRD, DDD4);
   clr_bit(PORTD, DDD5);
   clr_bit(PORTD, DDD4);
-  set_bit(SFIOR, PUD);
+  //  set_bit(SFIOR, PUD);
 }
 
 void SPI_Slave_Init()
@@ -191,7 +208,8 @@ uint8_t SPI_Read_Byte(void)
 
 void SPI_Listen()
 {
-  uint8_t delay = 10;
+  uint8_t delay = 9;
+
   for (;;)
     {
       uint8_t byte = SPI_Read_Byte();
@@ -289,7 +307,8 @@ int main(void)
   SPI_Slave_Init();
   Set_SRQ_Timer();
   Send_First_SRQ();
-  /* for (;;)
+  /*  
+  for (;;)
   {
     SPI_Send_Byte (0x60, 21);
     SPI_Send_Byte (0x01, 11);
