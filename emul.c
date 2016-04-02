@@ -32,6 +32,7 @@
 
 
 #define BDATA 5
+#define NODATA 6
 #define BCLK 7
 #define BRXEN 4
 #define BSRQ 3
@@ -87,12 +88,11 @@ void Led_Error(void)
 void SPI_Init_Master()
 {
   PORTB = 0xff;
-  DDRB = ((1<<DDB4)|(1<<DDB5)|(1<<DDB6)|(1<<DDB7)); //spi pins on port b MOSI SCK,SS outputs
+  DDRB = ((1<<BRXEN)|(1<<BDATA)|(1<<BCLK)|(1<<BSRQ)); //spi pins on port b MOSI SCK,SS outputs
   clr_bit(PORTB, BRXEN);
-  _delay_us(10);
+  _delay_us(20);
   clr_bit(PORTB, BDATA);
-  clr_bit(PORTB, 6);
-  _delay_us(30);
+  _delay_us(20);
   /*
   SPSR |= (1<<SPI2X);
   SPCR = ((1<<SPE)|(1<<MSTR)|(1<<DORD)|(1<<SPR0)|(1<<SPI2X)|(1<<SPR1)|(1<<CPOL)|(1<<CPHA));  // SPI enable, Master, f/16
@@ -125,11 +125,11 @@ uint8_t SPI_Send_Byte(uint8_t byte, uint8_t checksum)
     ;
   uint8_t ret = SPDR;
   SPI_Disable();
-  _delay_us(10);
+  _delay_us(6);
   clr_bit(DDRB, BRXEN);
   DDRB = 1<<BSRQ;
-  PORTB = 0xff & ~(1<<BRXEN); // ????
-  _delay_us(500);
+  PORTB = 0xff;
+  _delay_us(440);
   /*
   while(checksum--)
     {
@@ -201,8 +201,8 @@ uint8_t SPI_Read_Byte(void)
         }
     }
   // wait for complete
-  wait_high(PINB, BRXEN);
-  USART_Send_Byte (byte);
+  //wait_high(PINB, BRXEN);
+  //USART_Send_Byte (byte);
   return byte;
 }
 
@@ -273,8 +273,8 @@ void SPI_Listen()
             {
               _delay_ms(delay);
               SPI_Send_Byte (0x60, 21);
-              SPI_Send_Byte (0x01, 11);
-              SPI_Send_Byte (0x18, 26);
+                            SPI_Send_Byte (0x01, 11);
+                            SPI_Send_Byte (0x18, 26);
             }
         }
     }
