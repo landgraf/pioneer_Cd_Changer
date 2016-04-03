@@ -49,11 +49,18 @@
 #define FROM_TUNER 0x71
 //
 
+const uint8_t interval = 9;
 
+uint8_t is_playing = 0;
+uint8_t is_paused = 0;
+uint8_t is_random = 0;
+uint8_t counter = 0;
+
+uint8_t disk = 0;
+uint8_t track = 0;
 uint8_t mins = 0;
 volatile uint8_t secs = 0;
-uint8_t is_playing = 0;
-uint8_t counter = 0;
+volatile uint8_t in_recovery = 0;
 
 ISR(USART_RXC_vect)
 {
@@ -62,7 +69,14 @@ ISR(USART_RXC_vect)
   uint8_t dummy = UDR;
 }
 
-
+ISR(TIMER2_OVF_vect)
+{
+  in_recovery = bit_is_clear (PINB, BRST);
+  if (in_recovery)
+    {
+      clr_bit (PORTB, BSRQ);
+    };  
+}
 
 ISR(TIMER1_OVF_vect)
 {
@@ -114,9 +128,8 @@ void SPI_Disable()
 }
 
 
-uint8_t SPI_Send_Byte(uint8_t byte, uint8_t checksum)
+uint8_t SPI_Send_Byte(uint8_t byte)
 {
-  uint8_t delay_after = 44 - checksum;
   wait_high (PINB, BRXEN);
 
   SPI_Init_Master();
@@ -157,6 +170,7 @@ void SPI_Slave_Init()
 
 uint8_t SPI_Read_Byte(void)
 {
+  // TODO Replace with HW implementation
   // wait for BRXEN becomes low
   wait_low (PINB, BRXEN);
 
@@ -192,107 +206,167 @@ uint8_t SPI_Read_Byte(void)
   return byte;
 }
 
-void SPI_Listen()
-{
-  uint8_t delay = 9;
-
-  for (;;)
+void Send_Status_Not_Playing(){
+  _delay_ms(interval);
+  SPI_Send_Byte (0x60);
+  SPI_Send_Byte (0x03);
+  SPI_Send_Byte (0x18);
+  if (in_recovery)
     {
-      uint8_t byte = SPI_Read_Byte();
-      if (byte == 0x06)
-        {
-          set_bit(PORTB, BSRQ);
-          // We won!
-          uint8_t length = SPI_Read_Byte();
-          if (length > 1)
-            {
-              Led_Error();
-              USART_Send_Byte (0x02);
-              return;
-            }
-          
-          if (length)
-            {
-              uint8_t body = SPI_Read_Byte();
+      SPI_Send_Byte (0x10);
+      in_recovery = 0;
+    }
+  else
+    {
+      SPI_Send_Byte(0x11);
+    }
+  SPI_Send_Byte (0x01);
+};
 
-              switch (body)
-                {
-                case 0xF0:
-                  _delay_ms(delay);
+void Send_Status_Playing(){
+  _delay_ms(interval);
+  SPI_Send_Byte(0x61);
+  SPI_Send_Byte(0x0a);
 
-                  SPI_Send_Byte (0x60);
-                  SPI_Send_Byte (0x03);
-                  SPI_Send_Byte (0x18);
-                  SPI_Send_Byte (0x11);
-                  SPI_Send_Byte (0x01);
-                  break;
-                case 0x00:
-                case 0xf6:
-                  if (! is_playing){
-                    _delay_ms(delay);
-                    SPI_Send_Byte (0x60);
-                    SPI_Send_Byte (0x03);
-                    SPI_Send_Byte (0x18);
-                    SPI_Send_Byte (0x11);
-                    SPI_Send_Byte (0x01);
-                    //break;
-                  }
-                  else
-                    {
-                      _delay_ms(delay);
-                      SPI_Send_Byte(0x61);
-                      SPI_Send_Byte(0x0a);
-
-                      if (secs > 60){
-                        mins++;
-                        secs = 0;
-                      };
+  if ((! is_paused) && (secs > 60)){
+    if (secs > 60){
+      mins++;
+      secs = 0;
+    }
+  }
                   
-                      uint8_t body[10] = {0x18,
-                                          0x04,
-                                          0xf1,
-                                          0x01,
-                                          mins,
-                                          secs,
-                                          0x00,
-                                          0x3f,
-                                          0x03,
-                                          0x00};
-                      // Original CD changer sends words groupped by 3
-                      // for example
-                      // W - 0.5ms - W - 0.5ms - W ---------- 6ms ------------- W - 0.5ms - ....
-                      // emulate it here
-                      for (int i = 0; i < 10; i++){
-                        SPI_Send_Byte(body[i]);
-                        switch (i)
-                          {
-                          case 1 | 4 | 7  :
-                            _delay_ms(5);
-                            break;
-                          default:
-                            break;
-                          }
-                      };
-                    }
-                  break;
-                default:
-                  Led_Error();
-                  USART_Send_Byte (0x03);
-                  USART_Send_Byte (body);
-                  USART_Send_Byte (0x03);
-                  break;
+  uint8_t body[10] = {0x18,
+                      0x04,
+                      0xf1,
+                      0x01,
+                      mins,
+                      secs,
+                      0x00,
+                      0x3f,
+                      0x03,
+                      0x00};
+  // Original CD changer sends words groupped by 3
+  // for example
+  // W - 0.5ms - W - 0.5ms - W ---------- 6ms ------------- W - 0.5ms - ....
+  // emulate it here
+  for (int i = 0; i < 10; i++){
+    SPI_Send_Byte(body[i]);
+    switch (i)
+      {
+      case 1 | 4 | 7  :
+        _delay_ms(5);
+        break;
+      default:
+        break;
+      }
+  };
+}
+
+void Send_Status()
+{
+  if (is_playing)
+    {
+      Send_Status_Playing();
+      return;
+    };
+  Send_Status_Not_Playing();
+}
+
+void Process_Message()
+{
+            set_bit(PORTB, BSRQ);
+            // We won!
+            uint8_t length = SPI_Read_Byte();
+            if (length > 1)
+            {
+                Led_Error();
+                USART_Send_Byte (0x02);
+                return;
+            }
+
+            if (length)
+            {
+                uint8_t body = SPI_Read_Byte();
+
+                switch (body)
+                {
+                    case 0xF0:
+                        Send_Status_Not_Playing();
+                        break;
+                    case 0x06:
+                        is_playing = 1;
+                        Send_Status();
+                        break;
+                    case 0x16:
+                        is_playing = 0;
+                        Send_Status();
+                        break;
+                    case 0x26:
+                        track++;
+                        Send_Status();
+                        break;
+                    case 0x27:
+                        track--;
+                        Send_Status();
+                        break;
+                    case 0x28:
+                        is_random = ~is_random;
+                        Send_Status();
+                        break;
+                    case 0x3d:
+                        break;
+                    case 0xff:
+                        _delay_ms(interval);
+                        SPI_Send_Byte (0x60);
+                        SPI_Send_Byte (0x01);
+                        SPI_Send_Byte (0x18);
+                        break;
+
+                    case 0x00:
+                    case 0xf6:
+                        Send_Status();
+                        break;
+                    default:
+                        Led_Error();
+                        USART_Send_Byte (0x03);
+                        USART_Send_Byte (body);
+                        USART_Send_Byte (0x03);
+                        Send_Status();
+                        break;
                 }
             }
-          else
+            else
             {
-              _delay_ms(delay);
-              SPI_Send_Byte (0x60, 21);
-                            SPI_Send_Byte (0x01, 11);
-                            SPI_Send_Byte (0x18, 26);
+                _delay_ms(interval);
+                SPI_Send_Byte (0x60);
+                SPI_Send_Byte (0x01);
+                SPI_Send_Byte (0x18);
             }
+}
+
+void SPI_Listen()
+{
+
+    for (;;)
+    {
+      // read address
+        uint8_t byte = SPI_Read_Byte();
+        if (byte == 0x06)
+        {
+            Process_Message();
+        }
+        else
+        {
+            // Skip message
+            uint8_t length = SPI_Read_Byte();
+            if (! length){
+                while (length--)
+                {
+                    SPI_Read_Byte();
+                }
+            };
         }
     }
-
 }
 
 void Send_First_SRQ(void)
@@ -312,6 +386,12 @@ void Set_SRQ_Timer(){
   
 };
 
+void Set_RST_Watchdog()
+{
+  TCCR2 = (_BV(CS20));
+  TIMSK |= _BV(TOIE2);
+}
+
 int main(void)
 {
   USART_Init();
@@ -320,16 +400,8 @@ int main(void)
 
   SPI_Slave_Init();
   Set_SRQ_Timer();
+  Set_RST_Watchdog();
   Send_First_SRQ();
-  /*  
-  for (;;)
-  {
-    SPI_Send_Byte (0x60, 21);
-    SPI_Send_Byte (0x01, 11);
-    SPI_Send_Byte (0x18, 26);
-    _delay_ms(100);
-  };
-  */
   
   SPI_Listen();
 
