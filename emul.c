@@ -359,12 +359,15 @@ void SPI_Listen()
         {
             // Skip message
             uint8_t length = SPI_Read_Byte();
-            if (! length){
-                while (length--)
-                {
-                    SPI_Read_Byte();
-                }
-            };
+            USART_Send_Byte(0x67);
+	    USART_Send_Byte(length);
+	    while (length--)
+	    {
+		    uint8_t temp = SPI_Read_Byte();
+		    USART_Send_Byte(temp);
+	    }
+	    USART_Send_Byte(0x76);
+
         }
     }
 }
