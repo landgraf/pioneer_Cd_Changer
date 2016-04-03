@@ -3,7 +3,7 @@ all: build flash
 
 
 build:
-	avr-gcc -O2 -std=c99 -mmcu=atmega16 -o emul.o emul.c
+	avr-gcc -Os -O2 -std=c99 -mmcu=atmega16 -o emul.o emul.c
 	avr-objcopy -O ihex emul.o emul.hex
 
 flash: build

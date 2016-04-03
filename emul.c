@@ -51,16 +51,23 @@
 
 const uint8_t interval = 9;
 
-uint8_t is_playing = 0;
-uint8_t is_paused = 0;
-uint8_t is_random = 0;
+volatile uint8_t state = 0;
+#define playing  0
+#define paused  1
+#define random  2
+#define recovery 3
+
+#define is_playing() (state & (1<<playing))
+#define is_paused() (state & (1<<paused))
+#define is_random() (state & (1<<random))
+#define in_recovery() (state & (1<<recovery))
+
 uint8_t counter = 0;
 
 uint8_t disk = 0;
 uint8_t track = 0;
 uint8_t mins = 0;
 volatile uint8_t secs = 0;
-volatile uint8_t in_recovery = 0;
 
 ISR(USART_RXC_vect)
 {
@@ -71,8 +78,11 @@ ISR(USART_RXC_vect)
 
 ISR(TIMER2_OVF_vect)
 {
-  in_recovery = bit_is_clear (PINB, BRST);
-  if (in_recovery)
+  if bit_is_clear(PINB, BRST)
+  {
+      set_bit(state, recovery);
+  }
+  if (in_recovery())
     {
       clr_bit (PORTB, BSRQ);
     };  
@@ -205,15 +215,15 @@ uint8_t SPI_Read_Byte(void)
   return byte;
 }
 
-void Send_Status_Not_Playing(){
+static void inline Send_Status_Not_Playing(){
   _delay_ms(interval);
   SPI_Send_Byte (0x60);
   SPI_Send_Byte (0x03);
   SPI_Send_Byte (0x18);
-  if (in_recovery)
+  if (in_recovery())
     {
       SPI_Send_Byte (0x10);
-      in_recovery = 0;
+      clr_bit(state, recovery);
     }
   else
     {
@@ -227,7 +237,7 @@ void Send_Status_Playing(){
   SPI_Send_Byte(0x61);
   SPI_Send_Byte(0x0a);
 
-  if ((! is_paused) && (secs > 60)){
+  if ((! (is_paused()) ) && (secs > 60)){
     if (secs > 60){
       mins++;
       secs = 0;
@@ -263,7 +273,7 @@ void Send_Status_Playing(){
 
 void Send_Status()
 {
-  if (is_playing)
+  if (is_playing())
     {
       Send_Status_Playing();
       return;
@@ -293,11 +303,11 @@ void Process_Message()
                         Send_Status_Not_Playing();
                         break;
                     case 0x06:
-                        is_playing = 1;
+                        set_bit (state, playing);
                         Send_Status();
                         break;
                     case 0x16:
-                        is_playing = 0;
+                        clr_bit (state, playing);
                         Send_Status();
                         break;
                     case 0x26:
@@ -309,7 +319,7 @@ void Process_Message()
                         Send_Status();
                         break;
                     case 0x28:
-                        is_random = ~is_random;
+                        switch_bit(state, random);
                         Send_Status();
                         break;
                     case 0x3d:
