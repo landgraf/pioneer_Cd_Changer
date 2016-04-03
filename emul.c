@@ -137,7 +137,6 @@ uint8_t SPI_Send_Byte(uint8_t byte)
   SPDR = byte;
   while(!(SPSR & (1<<SPIF)))
     ;
-  uint8_t ret = SPDR;
   SPI_Disable();
   _delay_us(6);
   clr_bit(DDRB, BRXEN);
