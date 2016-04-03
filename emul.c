@@ -52,7 +52,7 @@
 
 uint8_t mins = 0;
 volatile uint8_t secs = 0;
-
+uint8_t is_playing = 0;
 uint8_t counter = 0;
 
 ISR(USART_RXC_vect)
@@ -118,6 +118,7 @@ uint8_t SPI_Send_Byte(uint8_t byte, uint8_t checksum)
 {
   uint8_t delay_after = 44 - checksum;
   wait_high (PINB, BRXEN);
+
   SPI_Init_Master();
   
   SPDR = byte;
@@ -130,19 +131,6 @@ uint8_t SPI_Send_Byte(uint8_t byte, uint8_t checksum)
   DDRB = 1<<BSRQ;
   PORTB = 0xff;
   _delay_us(440);
-  /*
-  while(checksum--)
-    {
-      _delay_us(10);
-    }
-  set_bit(PORTB, 4);
-  DDRB = 1<<BSRQ;
-  PORTB = 0xff;
-  while (delay_after--)
-    {
-      _delay_us(10);
-    };
-  */
   return SPDR;
 }
 
@@ -180,6 +168,7 @@ uint8_t SPI_Read_Byte(void)
       if (bit_is_set (PINB, BRXEN))
         {
           Led_Error();
+          USART_Send_Byte(0x01);
           return 0xBB;
         };
       // wait for falling clock
@@ -200,9 +189,6 @@ uint8_t SPI_Read_Byte(void)
           clr_bit(byte, bit);
         }
     }
-  // wait for complete
-  //wait_high(PINB, BRXEN);
-  //USART_Send_Byte (byte);
   return byte;
 }
 
@@ -221,6 +207,7 @@ void SPI_Listen()
           if (length > 1)
             {
               Led_Error();
+              USART_Send_Byte (0x02);
               return;
             }
           
@@ -230,42 +217,69 @@ void SPI_Listen()
 
               switch (body)
                 {
-                case 0x00 | 0xf6:
+                case 0xF0:
                   _delay_ms(delay);
-                  SPI_Send_Byte(0x61, 0x12);
-                  SPI_Send_Byte(0x0a, 0x6c);
 
-                  if (secs > 60){
-                    mins++;
-                    secs = 0;
-                  };
+                  SPI_Send_Byte (0x60);
+                  SPI_Send_Byte (0x03);
+                  SPI_Send_Byte (0x18);
+                  SPI_Send_Byte (0x11);
+                  SPI_Send_Byte (0x01);
+                  break;
+                case 0x00:
+                case 0xf6:
+                  if (! is_playing){
+                    _delay_ms(delay);
+                    SPI_Send_Byte (0x60);
+                    SPI_Send_Byte (0x03);
+                    SPI_Send_Byte (0x18);
+                    SPI_Send_Byte (0x11);
+                    SPI_Send_Byte (0x01);
+                    //break;
+                  }
+                  else
+                    {
+                      _delay_ms(delay);
+                      SPI_Send_Byte(0x61);
+                      SPI_Send_Byte(0x0a);
+
+                      if (secs > 60){
+                        mins++;
+                        secs = 0;
+                      };
                   
-                  uint8_t body[10] = {0x18,
-                                      0x04,
-                                      0xf1,
-                                      0x01,
-                                      mins,
-                                      secs,
-                                      0x00,
-                                      0x3f,
-                                      0x03,
-                                      0x00};
-                  // Original CD changer sends words groupped by 3
-                  // for example
-                  // W - 0.5ms - W - 0.5ms - W ---------- 6ms ------------- W - 0.5ms - ....
-                  // emulate it here
-                  for (int i = 0; i < 10; i++){
-                    SPI_Send_Byte(body[i], 0x12);
-                    switch (i)
-                      {
-                      case 1 | 4 | 7  :
-                        _delay_ms(5);
-                        break;
-                      default:
-                        break;
-                      }
-                  };
+                      uint8_t body[10] = {0x18,
+                                          0x04,
+                                          0xf1,
+                                          0x01,
+                                          mins,
+                                          secs,
+                                          0x00,
+                                          0x3f,
+                                          0x03,
+                                          0x00};
+                      // Original CD changer sends words groupped by 3
+                      // for example
+                      // W - 0.5ms - W - 0.5ms - W ---------- 6ms ------------- W - 0.5ms - ....
+                      // emulate it here
+                      for (int i = 0; i < 10; i++){
+                        SPI_Send_Byte(body[i]);
+                        switch (i)
+                          {
+                          case 1 | 4 | 7  :
+                            _delay_ms(5);
+                            break;
+                          default:
+                            break;
+                          }
+                      };
+                    }
+                  break;
                 default:
+                  Led_Error();
+                  USART_Send_Byte (0x03);
+                  USART_Send_Byte (body);
+                  USART_Send_Byte (0x03);
                   break;
                 }
             }
@@ -322,6 +336,7 @@ int main(void)
   for (;;)
     {
       Led_Error();
+      USART_Send_Byte (0x04);
       _delay_ms(200);
     }
 }
