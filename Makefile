@@ -1,4 +1,4 @@
-OPTFLAGS ?= -std=gnu99 -W -Wall -pedantic -Wstrict-prototypes -Wundef \
+OPTFLAGS ?= -std=c99 -W -Wall -pedantic -Wstrict-prototypes -Wundef \
 -funsigned-char -funsigned-bitfields -ffunction-sections -fpack-struct -fshort-enums \
 -ffreestanding -Os -g -gdwarf-2 \
 -fwhole-program \
