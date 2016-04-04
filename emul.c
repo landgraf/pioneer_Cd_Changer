@@ -301,27 +301,21 @@ void Process_Message(void)
                 switch (body)
                 {
                     case 0xF0:
-                        Send_Status_Not_Playing();
                         break;
                     case 0x06:
                         set_bit (state, playing);
-                        Send_Status();
                         break;
                     case 0x16:
                         clr_bit (state, playing);
-                        Send_Status();
                         break;
                     case 0x26:
                         track++;
-                        Send_Status();
                         break;
                     case 0x27:
                         track--;
-                        Send_Status();
                         break;
                     case 0x28:
                         switch_bit(state, random);
-                        Send_Status();
                         break;
                     case 0x3d:
                         break;
@@ -331,19 +325,19 @@ void Process_Message(void)
                         SPI_Send_Byte (0x01);
                         SPI_Send_Byte (0x18);
                         break;
-
                     case 0x00:
                     case 0xf6:
-                        Send_Status();
                         break;
                     default:
                         Led_Error();
                         USART_Send_Byte (0x03);
                         USART_Send_Byte (body);
                         USART_Send_Byte (0x03);
-                        Send_Status();
                         break;
                 }
+		if (0xff != body){
+			Send_Status();
+		}
             }
             else
             {
