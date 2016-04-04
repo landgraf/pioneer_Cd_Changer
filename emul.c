@@ -109,7 +109,7 @@ void Led_Error(void)
   PORTD = 0xff;
 }
 
-void SPI_Init_Master()
+void SPI_Init_Master(void)
 {
   PORTB = 0xff;
   DDRB = ((1<<BRXEN)|(1<<BDATA)|(1<<BCLK)|(1<<BSRQ)); //spi pins on port b MOSI SCK,SS outputs
@@ -132,7 +132,7 @@ void SPI_Init_Master()
 
 }
 
-void SPI_Disable()
+void SPI_Disable(void)
 {
   clr_bit(SPCR, SPE);
 }
@@ -163,7 +163,8 @@ void USART_Send_Byte(uint8_t u8Data){
   UDR = u8Data;
 }
 
-void Led_Init(){
+void Led_Init(void)
+{
   set_bit(DDRD, DDD5);
   set_bit(DDRD, DDD4);
   clr_bit(PORTD, DDD5);
@@ -171,7 +172,7 @@ void Led_Init(){
   //  set_bit(SFIOR, PUD);
 }
 
-void SPI_Slave_Init()
+void SPI_Slave_Init(void)
 {
   PORTB = 0x00 | (1<<BSRQ);
   DDRB  = 0x00 | (1<<BSRQ);
@@ -215,7 +216,7 @@ uint8_t SPI_Read_Byte(void)
   return byte;
 }
 
-static void inline Send_Status_Not_Playing(){
+void Send_Status_Not_Playing(void){
   _delay_ms(interval);
   SPI_Send_Byte (0x60);
   SPI_Send_Byte (0x03);
@@ -230,9 +231,9 @@ static void inline Send_Status_Not_Playing(){
       SPI_Send_Byte(0x11);
     }
   SPI_Send_Byte (0x01);
-};
+}
 
-void Send_Status_Playing(){
+void Send_Status_Playing(void){
   _delay_ms(interval);
   SPI_Send_Byte(0x61);
   SPI_Send_Byte(0x0a);
@@ -271,7 +272,7 @@ void Send_Status_Playing(){
   };
 }
 
-void Send_Status()
+void Send_Status(void)
 {
   if (is_playing())
     {
@@ -281,7 +282,7 @@ void Send_Status()
   Send_Status_Not_Playing();
 }
 
-void Process_Message()
+void Process_Message(void)
 {
             set_bit(PORTB, BSRQ);
             // We won!
@@ -353,7 +354,7 @@ void Process_Message()
             }
 }
 
-void SPI_Listen()
+void SPI_Listen(void)
 {
 
     for (;;)
@@ -389,16 +390,16 @@ void Send_First_SRQ(void)
   clr_bit (PORTB, BSRQ);
 }
 
-void Set_SRQ_Timer(){
+void Set_SRQ_Timer(void){
 
   // CD-Changer should send SRQ request to head unit
   // to achieve this use simple "blink on overflow"
   TCCR1B = _BV(CS11) | _BV(CS10); // prescale 64 524.288 ms 
   TIMSK = _BV(TOIE1); // Enable overflow interrupts
   
-};
+}
 
-void Set_RST_Watchdog()
+void Set_RST_Watchdog(void)
 {
   TCCR2 = (_BV(CS20));
   TIMSK |= _BV(TOIE2);
