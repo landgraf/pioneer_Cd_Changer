@@ -272,16 +272,6 @@ void Send_Status_Playing(void){
   };
 }
 
-void Send_Status(void)
-{
-  if (is_playing())
-    {
-      Send_Status_Playing();
-      return;
-    };
-  Send_Status_Not_Playing();
-}
-
 void Process_Message(void)
 {
             set_bit(PORTB, BSRQ);
@@ -336,7 +326,12 @@ void Process_Message(void)
                         break;
                 }
 		if (0xff != body){
-			Send_Status();
+			if (is_playing())
+			{
+				Send_Status_Playing();
+				return;
+			};
+			Send_Status_Not_Playing();
 		}
             }
             else
